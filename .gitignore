@@ -1,0 +1,103 @@
+# ======================
+# Python
+# ======================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ======================
+# Virtual Environments
+# ======================
+venv/
+env/
+ENV/
+.venv/
+
+# ======================
+# Environment Variables
+# ======================
+.env
+.env.*
+
+# ======================
+# Jupyter Notebook
+# ======================
+.ipynb_checkpoints/
+
+# ======================
+# Data (IMPORTANT)
+# ======================
+data/
+datasets/
+*.csv
+*.tsv
+*.json
+*.parquet
+
+# If you want to keep small sample data:
+# !data/sample.csv
+
+# ======================
+# Models & Weights
+# ======================
+models/
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.joblib
+*.pkl
+
+# ======================
+# Logs & Outputs
+# ======================
+logs/
+*.log
+outputs/
+results/
+wandb/
+mlruns/
+
+# ======================
+# Experiment Tracking
+# ======================
+tensorboard/
+runs/
+
+# ======================
+# IDE / Editor
+# ======================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ======================
+# OS Files
+# ======================
+.DS_Store
+Thumbs.db
+
+# ======================
+# Build / Packaging
+# ======================
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ======================
+# Testing
+# ======================
+.coverage
+htmlcov/
+.pytest_cache/
+
+# ======================
+# Misc
+# ======================
+*.tmp
+*.bak
+*.cache

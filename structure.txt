@@ -1,0 +1,16 @@
+rnn_lm/
+├── data/
+│   └── raw/           ← poetry .txt files go here
+├── checkpoints/       ← saved .npz weight files
+├── report/            ← loss curves, ablation results
+├── src/
+│   ├── data_loader.py     ← Step 2
+│   ├── embedding.py       ← Step 3
+│   ├── gru_cell.py        ← Step 4
+│   ├── gru_layer.py       ← Step 5
+│   ├── attention.py       ← Step 6
+│   ├── rnnlm.py           ← Step 7
+│   ├── adam.py            ← Step 8
+│   └── sampling.py        ← Step 9
+├── train.py               ← Step 10
+└── app.py                 ← Step 11 (Streamlit)
