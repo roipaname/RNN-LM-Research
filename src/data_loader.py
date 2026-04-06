@@ -12,7 +12,7 @@ import os
 import re
 import random
 import numpy as np
-from settings import GENRES_DATA_DIR
+from src.settings import GENRES_DATA_DIR
 from pathlib import Path
 # ──────────────────────────────────────────────
 # Special tokens

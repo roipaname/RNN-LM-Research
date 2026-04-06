@@ -21,9 +21,9 @@ The model exposes:
 import numpy as np
 import os
 
-from .embedding import EmbeddingLayer
-from .gru_layer  import GRULayer
-from .attention  import BahdanauAttention
+from src.embedding import EmbeddingLayer
+from src.gru_layer  import GRULayer
+from src.attention  import BahdanauAttention
 
 
 def softmax(x: np.ndarray) -> np.ndarray:

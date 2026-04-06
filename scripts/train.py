@@ -195,7 +195,7 @@ def main():
     parser.add_argument("--seq_len",     type=int,   default=100)
     parser.add_argument("--batch_size",  type=int,   default=64)
     parser.add_argument("--steps",       type=int,   default=200)
-    parser.add_argument("--patience",    type=int,   default=5)
+    parser.add_argument("--patience",    type=int,   default=20)
     parser.add_argument("--data_dir",    type=str,   default="data/raw")
     parser.add_argument("--checkpoint",  type=str,   default="checkpoints/best")
     parser.add_argument("--ablation",    type=str,   default=None,
