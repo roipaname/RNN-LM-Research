@@ -12,8 +12,8 @@ import os
 import re
 import random
 import numpy as np
-
-
+from settings import GENRES_DATA_DIR
+from pathlib import Path
 # ──────────────────────────────────────────────
 # Special tokens
 # ──────────────────────────────────────────────
@@ -59,7 +59,7 @@ class DataLoader:
 
     def __init__(
         self,
-        data_dir: str,
+        data_dir: str | Path =GENRES_DATA_DIR,
         seq_len: int = 100,
         batch_size: int = 64,
         seed: int = 42,
@@ -192,3 +192,43 @@ class DataLoader:
                 total_loss += loss
         avg_loss = total_loss / (steps * self.batch_size)
         return float(np.exp(avg_loss))
+
+
+
+
+if __name__ == "__main__":
+    print("🔍 Testing DataLoader...\n")
+
+    # Initialize
+    loader = DataLoader()
+
+    # Check splits
+    print("\n📊 Split sizes:")
+    for split in ["train", "val", "test"]:
+        print(f"{split}: {len(loader.splits[split])} poems")
+
+    # Check vocab
+    print(f"\n🔤 Vocabulary size: {loader.vocab.size}")
+
+    # Encode + decode sanity check
+    sample_text = loader.splits["train"][0][:200]
+    encoded = loader.vocab.encode(sample_text)
+    decoded = loader.vocab.decode(encoded)
+
+    print("\n🔁 Encode/Decode Test:")
+    print("Original:", sample_text[:100])
+    print("Decoded :", decoded[:100])
+
+    # Batch sampling test
+    X, Y = loader.sample_batch("train")
+
+    print("\n📦 Batch shapes:")
+    print("X:", X.shape)
+    print("Y:", Y.shape)
+
+    # Show one example sequence
+    print("\n🧪 Sample sequence:")
+    print("Input :", loader.vocab.decode(X[0][:100].tolist()))
+    print("Target:", loader.vocab.decode(Y[0][:100].tolist()))
+
+    print("\n✅ DataLoader test complete!")
