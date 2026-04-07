@@ -1,3 +1,10 @@
+
+import sys
+
+import os
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if ROOT_DIR not in sys.path:
+    sys.path.append(ROOT_DIR)
 """
 app.py
 ------
@@ -14,7 +21,7 @@ Features:
   - Attention alpha heatmap (UC-10)
 """
 
-import os
+
 import numpy as np
 import streamlit as st
 import seaborn as sns
@@ -28,7 +35,7 @@ from src.sampling    import top_k_probs
 # Constants
 # ──────────────────────────────────────────────────────────────────────────────
 
-DATA_DIR   = "data/raw/topics"
+DATA_DIR   = "data/raw"
 CKPT_PATH  = "checkpoints/best.npz"
 
 
@@ -39,17 +46,15 @@ CKPT_PATH  = "checkpoints/best.npz"
 @st.cache_resource(show_spinner="Loading model…")
 def load_resources():
     loader = DataLoader(DATA_DIR, seq_len=100, batch_size=1)
-    model  = RNNLM(
-        vocab_size = loader.vocab.size,
-        embed_dim  = 64,
-        hidden_dim = 256,
-        num_layers = 2,
-        keep_prob  = 1.0,   # no dropout at inference
-    )
+
     if os.path.exists(CKPT_PATH):
-        model.load(CKPT_PATH)
+        # Reconstruct model with the exact dims stored in the checkpoint
+        model = RNNLM.from_checkpoint(CKPT_PATH)
     else:
         st.warning("No checkpoint found — using random weights. Train the model first.")
+        model = RNNLM(vocab_size=loader.vocab.size, embed_dim=64,
+                      hidden_dim=256, num_layers=2, keep_prob=1.0)
+
     return loader, model
 
 

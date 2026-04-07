@@ -21,9 +21,9 @@ The model exposes:
 import numpy as np
 import os
 
-from src.embedding import EmbeddingLayer
-from src.gru_layer  import GRULayer
-from src.attention  import BahdanauAttention
+from .embedding import EmbeddingLayer
+from .gru_layer  import GRULayer
+from .attention  import BahdanauAttention
 
 
 def softmax(x: np.ndarray) -> np.ndarray:
@@ -265,11 +265,36 @@ class RNNLM:
 
     def save(self, path: str) -> None:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        np.savez_compressed(path, **self.params())
+        payload = self.params()
+        # Store hyperparams so load() can verify / reconstruct dimensions
+        payload["_vocab_size"]  = np.array(self.vocab_size)
+        payload["_hidden_dim"]  = np.array(self.H)
+        payload["_embed_dim"]   = np.array(self.embedding.embed_dim)
+        payload["_num_layers"]  = np.array(self.gru.num_layers)
+        np.savez_compressed(path, **payload)
         print(f"[RNNLM] Saved checkpoint → {path}")
 
     def load(self, path: str) -> None:
-        data = np.load(path + ".npz" if not path.endswith(".npz") else path)
+        fpath = path if path.endswith(".npz") else path + ".npz"
+        data  = np.load(fpath)
+
+        # If the checkpoint recorded hyperparams, validate them
+        if "_hidden_dim" in data:
+            ckpt_H     = int(data["_hidden_dim"])
+            ckpt_V     = int(data["_vocab_size"])
+            ckpt_d     = int(data["_embed_dim"])
+            ckpt_nl    = int(data["_num_layers"])
+            if (ckpt_H != self.H or ckpt_V != self.vocab_size
+                    or ckpt_d != self.embedding.embed_dim
+                    or ckpt_nl != self.gru.num_layers):
+                raise ValueError(
+                    f"Checkpoint hyperparams (V={ckpt_V}, d={ckpt_d}, "
+                    f"H={ckpt_H}, layers={ckpt_nl}) do not match this model "
+                    f"(V={self.vocab_size}, d={self.embedding.embed_dim}, "
+                    f"H={self.H}, layers={self.gru.num_layers}). "
+                    "Rebuild the model with matching hyperparams before loading."
+                )
+
         # Route each array back to its module
         emb_dict  = {k[4:]: v for k, v in data.items() if k.startswith("emb_")}
         gru_dict  = {k[4:]: v for k, v in data.items() if k.startswith("gru_")}
@@ -281,3 +306,21 @@ class RNNLM:
         self.W_out = data["W_out"].copy()
         self.b_out = data["b_out"].copy()
         print(f"[RNNLM] Loaded checkpoint ← {path}")
+
+    @staticmethod
+    def from_checkpoint(path: str) -> "RNNLM":
+        """
+        Reconstruct an RNNLM with the exact hyperparams stored in a checkpoint,
+        then load the weights. Use this in app.py instead of hardcoding dims.
+        """
+        fpath = path if path.endswith(".npz") else path + ".npz"
+        data  = np.load(fpath)
+        model = RNNLM(
+            vocab_size = int(data["_vocab_size"]),
+            embed_dim  = int(data["_embed_dim"]),
+            hidden_dim = int(data["_hidden_dim"]),
+            num_layers = int(data["_num_layers"]),
+            keep_prob  = 1.0,   # inference — no dropout
+        )
+        model.load(fpath)
+        return model
