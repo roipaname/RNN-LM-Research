@@ -12,5 +12,5 @@ rnn_lm/
 │   ├── rnnlm.py           ← Step 7
 │   ├── adam.py            ← Step 8
 │   └── sampling.py        ← Step 9
-├── train.py               ← Step 10
-└── app.py                 ← Step 11 (Streamlit)
+├── scripts/train.py               ← Step 10
+└── frontend/app.py                 ← Step 11 (Streamlit)
