@@ -188,7 +188,7 @@ class VanillaRNNLM(RNNLM):
 
 def main():
     parser = argparse.ArgumentParser(description="Train RNN Language Model")
-    parser.add_argument("--epochs",      type=int,   default=30)
+    parser.add_argument("--epochs",      type=int,   default=200)
     parser.add_argument("--lr",          type=float, default=1e-3)
     parser.add_argument("--hidden",      type=int,   default=256)
     parser.add_argument("--embed",       type=int,   default=64)
@@ -196,7 +196,7 @@ def main():
     parser.add_argument("--batch_size",  type=int,   default=64)
     parser.add_argument("--steps",       type=int,   default=200)
     parser.add_argument("--patience",    type=int,   default=20)
-    parser.add_argument("--data_dir",    type=str,   default="data/raw")
+    parser.add_argument("--data_dir",    type=str,   default="data/raw/topics")
     parser.add_argument("--checkpoint",  type=str,   default="checkpoints/best")
     parser.add_argument("--ablation",    type=str,   default=None,
                         choices=[None, "no_attention", "single_layer",
