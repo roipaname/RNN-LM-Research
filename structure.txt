@@ -1,4 +1,4 @@
-rnn_lm/
+rnn_lm/notebooks
 ├── data/
 │   └── raw/           ← poetry .txt files go here
 ├── checkpoints/       ← saved .npz weight files
