@@ -35,7 +35,7 @@ from src.sampling    import top_k_probs
 # Constants
 # ──────────────────────────────────────────────────────────────────────────────
 
-DATA_DIR   = "data/raw"
+DATA_DIR   = "data/raw/topics"
 CKPT_PATH  = "checkpoints/best.npz"
 
 
