@@ -3,24 +3,32 @@ train.py
 --------
 Training script for the RNN Language Model.
 
+By default the script RESUMES from the best existing checkpoint if one is
+found. Pass --scratch to start from random weights instead.
+
 Usage:
-    python train.py                        # baseline training
+    python train.py                        # resume char-level (default)
+    python train.py --scratch              # train char-level from scratch
+    python train.py --mode word            # resume word-level model
+    python train.py --mode word --scratch  # word-level from scratch
     python train.py --ablation no_attention
     python train.py --ablation single_layer
     python train.py --ablation no_dropout
     python train.py --ablation vanilla_rnn
 
 Hyperparameters (adjust at the top of main() or via CLI flags):
-    --epochs       int   (default 30)
+    --mode         str   "char" or "word"  (default "char")
+    --scratch      flag  start from random weights, ignoring any checkpoint
+    --epochs       int   (default 200)
     --lr           float (default 1e-3)
     --hidden       int   (default 256)
     --embed        int   (default 64)
     --seq_len      int   (default 100)
     --batch_size   int   (default 64)
     --steps        int   (default 200 steps per epoch)
-    --patience     int   (default 5  early-stopping patience)
-    --data_dir     str   (default data/raw)
-    --checkpoint   str   (default checkpoints/best)
+    --patience     int   (default 20 early-stopping patience)
+    --data_dir     str   (default data/raw/topics)
+    --checkpoint   str   (override checkpoint path)
 """
 
 import argparse
@@ -32,6 +40,7 @@ import numpy as np
 from src.data_loader import DataLoader
 from src.rnnlm       import RNNLM
 from src.adam        import Adam
+from src.settings    import BEST_MODEL_WORD, BEST_MODEL_LETTER
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -60,9 +69,6 @@ def build_model(args, vocab_size: int) -> RNNLM:
         print("[Ablation] no_dropout: keep_prob = 1.0")
 
     elif ablation == "no_attention":
-        # We signal no_attention by setting attn_dim to 0;
-        # RNNLM will skip the attention module and use h_T directly.
-        # (See the NoAttentionRNNLM subclass below.)
         print("[Ablation] no_attention: bypassing BahdanauAttention")
         return NoAttentionRNNLM(**kwargs)
 
@@ -92,7 +98,6 @@ def train_one_epoch(
         batch_loss /= len(X)
         total_loss += batch_loss
 
-        # Backward + update
         grads = model.backward(scale=1.0 / len(X))
         params = model.params()
         optimizer.step(params, grads)
@@ -113,7 +118,7 @@ class NoAttentionRNNLM(RNNLM):
     def forward(self, tokens, targets=None, training=True):
         emb      = self.embedding.forward(tokens)
         H_states = self.gru.forward(emb, training=training)
-        h_T      = H_states[-1]                          # (H,) last state only
+        h_T      = H_states[-1]
 
         logits_single = self.W_out @ h_T + self.b_out
         T = len(tokens)
@@ -151,7 +156,6 @@ class NoAttentionRNNLM(RNNLM):
         self.db_out += d_logits_single
         d_h_T = self.W_out.T @ d_logits_single
 
-        # Only gradient for last timestep
         dH = np.zeros_like(c["H_states"])
         dH[-1] = d_h_T
 
@@ -167,14 +171,12 @@ class NoAttentionRNNLM(RNNLM):
 class VanillaRNNLM(RNNLM):
     """
     Simplified RNNLM using a single-layer vanilla RNN (no gates, no attention).
-    For ablation study only — demonstrates the vanishing gradient baseline.
+    For ablation study only.
     """
 
     def __init__(self, **kwargs):
-        # Build the standard model but replace GRU with a 1-layer vanilla wrapper
         super().__init__(**kwargs)
         from src.gru_layer import GRULayer
-        # keep_prob=1.0 (no dropout), num_layers=1 for vanilla comparison
         self.gru = GRULayer(
             kwargs["embed_dim"], kwargs["hidden_dim"],
             num_layers=1, keep_prob=1.0
@@ -188,6 +190,9 @@ class VanillaRNNLM(RNNLM):
 
 def main():
     parser = argparse.ArgumentParser(description="Train RNN Language Model")
+    parser.add_argument("--mode",        type=str,   default="char",
+                        choices=["char", "word"],
+                        help="Tokenisation level: 'char' or 'word'")
     parser.add_argument("--epochs",      type=int,   default=200)
     parser.add_argument("--lr",          type=float, default=1e-3)
     parser.add_argument("--hidden",      type=int,   default=256)
@@ -197,7 +202,11 @@ def main():
     parser.add_argument("--steps",       type=int,   default=200)
     parser.add_argument("--patience",    type=int,   default=20)
     parser.add_argument("--data_dir",    type=str,   default="data/raw/topics")
-    parser.add_argument("--checkpoint",  type=str,   default="checkpoints/best")
+    parser.add_argument("--checkpoint",  type=str,   default=None,
+                        help="Override checkpoint path. Defaults to "
+                             "checkpoints/best_model_word or best_model_letter.")
+    parser.add_argument("--scratch",     action="store_true",
+                        help="Train from random weights, ignoring any existing checkpoint.")
     parser.add_argument("--ablation",    type=str,   default=None,
                         choices=[None, "no_attention", "single_layer",
                                  "no_dropout", "vanilla_rnn"])
@@ -206,27 +215,48 @@ def main():
     os.makedirs("checkpoints", exist_ok=True)
     os.makedirs("report",      exist_ok=True)
 
+    # ── Resolve checkpoint path from mode ────────────────────────
+    if args.checkpoint is None:
+        if args.mode == "word":
+            ckpt_path = str(BEST_MODEL_WORD).replace(".npz", "")
+        else:
+            ckpt_path = str(BEST_MODEL_LETTER).replace(".npz", "")
+    else:
+        ckpt_path = args.checkpoint
+
+    # Append ablation suffix if needed
+    suffix = f"_{args.ablation}" if args.ablation else ""
+    ckpt_path = ckpt_path + suffix
+    ckpt_file = ckpt_path + ".npz"
+
     # ── 1. Data ─────────────────────────────────────────────────
-    print("\n=== Loading dataset ===")
+    print(f"\n=== Loading dataset (mode='{args.mode}') ===")
     loader = DataLoader(
         data_dir   = args.data_dir,
         seq_len    = args.seq_len,
         batch_size = args.batch_size,
+        mode       = args.mode,
     )
 
     # ── 2. Model ─────────────────────────────────────────────────
     print("\n=== Building model ===")
     model = build_model(args, vocab_size=loader.vocab.size)
-    print(f"    vocab_size={loader.vocab.size}, hidden={args.hidden}, "
-          f"embed={args.embed}")
+    print(f"    mode={args.mode}, vocab_size={loader.vocab.size}, "
+          f"hidden={args.hidden}, embed={args.embed}")
+
+    # ── Resume or scratch ─────────────────────────────────────────
+    if not args.scratch and os.path.exists(ckpt_file):
+        print(f"\n=== Resuming from checkpoint: {ckpt_file} ===")
+        model.load(ckpt_file)
+    elif args.scratch:
+        print("\n=== Starting from scratch (--scratch flag set) ===")
+    else:
+        print(f"\n=== No checkpoint found at '{ckpt_file}' — starting from scratch ===")
 
     # ── 3. Optimiser ─────────────────────────────────────────────
     optimizer = Adam(lr=args.lr, clip=5.0)
 
     # ── 4. Training loop ─────────────────────────────────────────
-    suffix = f"_{args.ablation}" if args.ablation else ""
-    ckpt_path = args.checkpoint + suffix
-
     best_val_ppl = float("inf")
     patience_counter = 0
     history = []   # (epoch, train_loss, val_ppl)
@@ -249,7 +279,7 @@ def main():
             best_val_ppl = val_ppl
             patience_counter = 0
             model.save(ckpt_path)
-            print(f"  ✓ New best val_ppl={val_ppl:.2f} — checkpoint saved")
+            print(f"  ✓ New best val_ppl={val_ppl:.2f} — checkpoint saved → {ckpt_path}")
         else:
             patience_counter += 1
             print(f"  No improvement ({patience_counter}/{args.patience})")
@@ -259,7 +289,7 @@ def main():
             break
 
     # ── 5. Save training log ─────────────────────────────────────
-    log_path = f"report/training_log{suffix}.csv"
+    log_path = f"report/training_log_{args.mode}{suffix}.csv"
     with open(log_path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["epoch", "train_loss", "val_ppl"])
@@ -269,7 +299,7 @@ def main():
     # ── 6. Test evaluation ───────────────────────────────────────
     model.load(ckpt_path)
     test_ppl = loader.compute_perplexity(model, "test", steps=50)
-    print(f"\nFinal test perplexity: {test_ppl:.2f}")
+    print(f"\nFinal test perplexity ({args.mode}-level): {test_ppl:.2f}")
 
     # ── 7. Ablation comparison ───────────────────────────────────
     if args.ablation:
@@ -278,8 +308,8 @@ def main():
         with open(ablation_path, "a", newline="") as f:
             writer = csv.writer(f)
             if not file_exists:
-                writer.writerow(["variant", "best_val_ppl", "test_ppl"])
-            writer.writerow([args.ablation, best_val_ppl, test_ppl])
+                writer.writerow(["variant", "mode", "best_val_ppl", "test_ppl"])
+            writer.writerow([args.ablation, args.mode, best_val_ppl, test_ppl])
         print(f"Ablation results appended → {ablation_path}")
 
 
