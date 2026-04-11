@@ -44,6 +44,43 @@ from src.settings    import BEST_MODEL_WORD, BEST_MODEL_LETTER
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Checkpoint helpers  (format-compatible with the training notebook)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def save_checkpoint(params: dict, path: str) -> None:
+    """Save a flat param dict to a .npz file (matches notebook format)."""
+    path = str(path)
+    if not path.endswith(".npz"):
+        path += ".npz"
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    np.savez_compressed(path, **{k: np.array(v) for k, v in params.items()})
+    print(f"  Saved  -> {path}")
+
+
+def load_checkpoint(path: str) -> dict:
+    """Load a .npz checkpoint into a plain NumPy param dict."""
+    path = str(path)
+    if not path.endswith(".npz"):
+        path += ".npz"
+    data = np.load(path)
+    params = {k: np.array(v) for k, v in data.items()}
+    print(f"  Loaded <- {path}  ({len(params)} arrays)")
+    return params
+
+
+def apply_checkpoint(model: RNNLM, params: dict) -> None:
+    """Push a loaded param dict back into a model instance."""
+    emb_dict  = {k[4:]: v for k, v in params.items() if k.startswith("emb_")}
+    gru_dict  = {k[4:]: v for k, v in params.items() if k.startswith("gru_")}
+    attn_dict = {k[5:]: v for k, v in params.items() if k.startswith("attn_")}
+    model.embedding.load_state_dict(emb_dict)
+    model.gru.load_state_dict(gru_dict)
+    model.attention.load_state_dict(attn_dict)
+    model.W_out = params["W_out"].copy()
+    model.b_out = params["b_out"].copy()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -247,7 +284,8 @@ def main():
     # ── Resume or scratch ─────────────────────────────────────────
     if not args.scratch and os.path.exists(ckpt_file):
         print(f"\n=== Resuming from checkpoint: {ckpt_file} ===")
-        model.load(ckpt_file)
+        params = load_checkpoint(ckpt_file)
+        apply_checkpoint(model, params)
     elif args.scratch:
         print("\n=== Starting from scratch (--scratch flag set) ===")
     else:
@@ -278,7 +316,7 @@ def main():
         if val_ppl < best_val_ppl:
             best_val_ppl = val_ppl
             patience_counter = 0
-            model.save(ckpt_path)
+            save_checkpoint(model.params(), ckpt_path)
             print(f"  ✓ New best val_ppl={val_ppl:.2f} — checkpoint saved → {ckpt_path}")
         else:
             patience_counter += 1
@@ -297,7 +335,7 @@ def main():
     print(f"\nTraining log saved → {log_path}")
 
     # ── 6. Test evaluation ───────────────────────────────────────
-    model.load(ckpt_path)
+    apply_checkpoint(model, load_checkpoint(ckpt_file))
     test_ppl = loader.compute_perplexity(model, "test", steps=50)
     print(f"\nFinal test perplexity ({args.mode}-level): {test_ppl:.2f}")
 
