@@ -36,7 +36,7 @@ from src.sampling    import top_k_probs
 # ──────────────────────────────────────────────────────────────────────────────
 
 DATA_DIR   = "data/raw/topics" #path to data
-CKPT_PATH  = "checkpoints/best.npz"
+CKPT_PATH  = "checkpoints/best_model_word.npz"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
