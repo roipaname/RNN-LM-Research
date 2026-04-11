@@ -20,7 +20,11 @@ for dir in [DATA_DIR, RAW_DATA_DIR, GENRES_DATA_DIR, PROCESSED_DATA_DIR, CHECKPO
 
 
 
-
+# ──────────────────────────────────────────────
+# Model checkpoint paths
+# ──────────────────────────────────────────────
+BEST_MODEL_WORD   = CHECKPOINTS_DIR / "best_model_word.npz"
+BEST_MODEL_LETTER = CHECKPOINTS_DIR / "best_model_letter.npz"
 
 # ============================================================================
 # LOGGING CONFIGURATION
