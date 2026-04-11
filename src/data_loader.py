@@ -1,11 +1,14 @@
 """
 data_loader.py
 --------------
-Loads the poetry corpus, builds the character vocabulary,
+Loads the poetry corpus, builds the character or word vocabulary,
 encodes all sequences, and provides batch sampling.
 
 Split is done at POEM level (not line level) to prevent data leakage.
 Partition: 80% train / 10% validation / 10% test.
+
+Pass mode="char" (default) for the character-level model,
+or mode="word" for the word-level model.
 """
 
 import os
@@ -22,21 +25,37 @@ UNK_TOKEN = "<UNK>"
 
 
 class Vocabulary:
-    """Maps characters to integer indices and back."""
+    """Maps characters (or words) to integer indices and back."""
 
     def __init__(self):
         self.char2idx: dict[str, int] = {}
         self.idx2char: dict[int, str] = {}
+        self.mode: str = "char"
         self._built = False
 
-    def build(self, text: str) -> None:
-        """Build vocab from a string of all training text."""
-        chars = sorted(set(text))
+    def build(self, text: str, mode: str = "char") -> None:
+        """
+        Build vocab from a string of all training text.
+
+        Parameters
+        ----------
+        text : str   — full training corpus as a single string
+        mode : str   — "char" (default) or "word"
+        """
+        self.mode = mode
+
+        if mode == "char":
+            tokens = sorted(set(text))
+        elif mode == "word":
+            tokens = sorted(set(text.split()))
+        else:
+            raise ValueError(f"Unknown vocab mode '{mode}'. Use 'char' or 'word'.")
+
         # Reserve index 0 for PAD, 1 for UNK
         special = [PAD_TOKEN, UNK_TOKEN]
-        all_tokens = special + chars
-        self.char2idx = {ch: i for i, ch in enumerate(all_tokens)}
-        self.idx2char = {i: ch for ch, i in self.char2idx.items()}
+        all_tokens = special + tokens
+        self.char2idx = {tok: i for i, tok in enumerate(all_tokens)}
+        self.idx2char = {i: tok for tok, i in self.char2idx.items()}
         self._built = True
 
     @property
@@ -45,30 +64,48 @@ class Vocabulary:
 
     def encode(self, text: str) -> list[int]:
         unk = self.char2idx[UNK_TOKEN]
-        return [self.char2idx.get(ch, unk) for ch in text]
+        if self.mode == "char":
+            return [self.char2idx.get(ch, unk) for ch in text]
+        else:  # word
+            return [self.char2idx.get(w, unk) for w in text.split()]
 
     def decode(self, indices: list[int]) -> str:
-        return "".join(self.idx2char.get(i, UNK_TOKEN) for i in indices)
+        tokens = [self.idx2char.get(i, UNK_TOKEN) for i in indices]
+        if self.mode == "char":
+            return "".join(tokens)
+        else:  # word
+            return " ".join(tokens)
 
 
 class DataLoader:
     """
     Loads .txt files from data_dir, splits poems, builds vocab,
     and provides random batch sampling for training.
+
+    Parameters
+    ----------
+    data_dir   : path to genre folders containing .txt files
+    seq_len    : context window length (in tokens)
+    batch_size : number of sequences per batch
+    seed       : random seed
+    mode       : "char" for character-level model,
+                 "word" for word-level model
     """
 
     def __init__(
         self,
-        data_dir: str | Path =GENRES_DATA_DIR,
+        data_dir: str | Path = GENRES_DATA_DIR,
         seq_len: int = 100,
         batch_size: int = 64,
         seed: int = 42,
+        mode: str = "char",
     ):
         self.data_dir = data_dir
         self.seq_len = seq_len
         self.batch_size = batch_size
         self.rng = random.Random(seed)
         self.np_rng = np.random.default_rng(seed)
+        self.mode = mode
 
         self.vocab = Vocabulary()
 
@@ -92,24 +129,23 @@ class DataLoader:
         Poems are separated by blank lines (standard Gutenberg format).
         """
         poems: list[str] = []
-        txt_files=[]
+        txt_files = []
         for genre in os.listdir(self.data_dir):
-          genre_path = os.path.join(self.data_dir, genre)
+            genre_path = os.path.join(self.data_dir, genre)
 
-          if not os.path.isdir(genre_path):
-             continue  # skip files if any
-          for f in os.listdir(genre_path):
+            if not os.path.isdir(genre_path):
+                continue  # skip files if any
+            for f in os.listdir(genre_path):
                 if f.endswith(".txt"):
-                    file_path=os.path.join(genre_path,f)
+                    file_path = os.path.join(genre_path, f)
                     txt_files.append(file_path)
 
-        if not txt_files or len(txt_files)==0:
+        if not txt_files or len(txt_files) == 0:
             raise FileNotFoundError(
                 f"No .txt files found in '{self.data_dir}'. "
                 "Please place your poetry corpus files there."
             )
         for path in sorted(txt_files):
-            
             with open(path, encoding="utf-8", errors="replace") as fh:
                 raw = fh.read()
             # Split on double newlines to separate poems/stanzas
@@ -133,8 +169,8 @@ class DataLoader:
 
     def _build_vocab(self) -> None:
         train_text = "\n".join(self.splits["train"])
-        self.vocab.build(train_text)
-        print(f"[DataLoader] Vocabulary size: {self.vocab.size}")
+        self.vocab.build(train_text, mode=self.mode)
+        print(f"[DataLoader] Vocabulary size ({self.mode}-level): {self.vocab.size}")
 
     def _encode_splits(self) -> None:
         for split, poems in self.splits.items():
@@ -143,7 +179,7 @@ class DataLoader:
                 self.vocab.encode(text), dtype=np.int32
             )
             print(
-                f"[DataLoader] {split} encoded length: {len(self.encoded[split]):,} chars"
+                f"[DataLoader] {split} encoded length: {len(self.encoded[split]):,} tokens"
             )
 
     # ──────────────────────────────────────────
@@ -199,36 +235,30 @@ class DataLoader:
 if __name__ == "__main__":
     print("🔍 Testing DataLoader...\n")
 
-    # Initialize
-    loader = DataLoader()
+    for mode in ["char", "word"]:
+        print(f"\n{'='*40}")
+        print(f"  Mode: {mode}-level")
+        print(f"{'='*40}")
 
-    # Check splits
-    print("\n📊 Split sizes:")
-    for split in ["train", "val", "test"]:
-        print(f"{split}: {len(loader.splits[split])} poems")
+        loader = DataLoader(mode=mode)
 
-    # Check vocab
-    print(f"\n🔤 Vocabulary size: {loader.vocab.size}")
+        print("\n📊 Split sizes:")
+        for split in ["train", "val", "test"]:
+            print(f"  {split}: {len(loader.splits[split])} poems")
 
-    # Encode + decode sanity check
-    sample_text = loader.splits["train"][0][:200]
-    encoded = loader.vocab.encode(sample_text)
-    decoded = loader.vocab.decode(encoded)
+        print(f"\n🔤 Vocabulary size: {loader.vocab.size}")
 
-    print("\n🔁 Encode/Decode Test:")
-    print("Original:", sample_text[:100])
-    print("Decoded :", decoded[:100])
+        sample_text = loader.splits["train"][0][:200]
+        encoded = loader.vocab.encode(sample_text)
+        decoded = loader.vocab.decode(encoded)
 
-    # Batch sampling test
-    X, Y = loader.sample_batch("train")
+        print("\n🔁 Encode/Decode Test:")
+        print("Original:", sample_text[:100])
+        print("Decoded :", decoded[:100])
 
-    print("\n📦 Batch shapes:")
-    print("X:", X.shape)
-    print("Y:", Y.shape)
-
-    # Show one example sequence
-    print("\n🧪 Sample sequence:")
-    print("Input :", loader.vocab.decode(X[0][:100].tolist()))
-    print("Target:", loader.vocab.decode(Y[0][:100].tolist()))
+        X, Y = loader.sample_batch("train")
+        print("\n📦 Batch shapes:")
+        print("X:", X.shape)
+        print("Y:", Y.shape)
 
     print("\n✅ DataLoader test complete!")
