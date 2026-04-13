@@ -4,51 +4,55 @@ train.py
 Training script for the RNN Language Model.
 
 By default the script RESUMES from the best existing checkpoint if one is
-found. Pass --scratch to start from random weights instead.
+found. The checkpoint's stored hyperparams (_vocab_size, _embed_dim,
+_hidden_dim, _num_layers) are used to rebuild the model and DataLoader
+automatically — no need to re-specify them on the command line.
+
+Pass --scratch to ignore any checkpoint and train from random weights.
 
 Usage:
-    python train.py                        # resume char-level (default)
-    python train.py --scratch              # train char-level from scratch
-    python train.py --mode word            # resume word-level model
-    python train.py --mode word --scratch  # word-level from scratch
-    python train.py --ablation no_attention
-    python train.py --ablation single_layer
-    python train.py --ablation no_dropout
-    python train.py --ablation vanilla_rnn
+    python -m scripts.train --mode char          # resume char-level (default)
+    python -m scripts.train --mode word          # resume word-level
+    python -m scripts.train --mode char --scratch
+    python -m scripts.train --ablation no_attention
+    python -m scripts.train --ablation single_layer
+    python -m scripts.train --ablation no_dropout
+    python -m scripts.train --ablation vanilla_rnn
 
-Hyperparameters (adjust at the top of main() or via CLI flags):
+CLI flags (only needed when training from --scratch or first run):
     --mode         str   "char" or "word"  (default "char")
-    --scratch      flag  start from random weights, ignoring any checkpoint
+    --scratch      flag  ignore checkpoint; train from random weights
     --epochs       int   (default 200)
     --lr           float (default 1e-3)
-    --hidden       int   (default 256)
-    --embed        int   (default 64)
+    --hidden       int   (default 256)   ← overridden by checkpoint if resuming
+    --embed        int   (default 64)    ← overridden by checkpoint if resuming
     --seq_len      int   (default 100)
     --batch_size   int   (default 64)
-    --steps        int   (default 200 steps per epoch)
-    --patience     int   (default 20 early-stopping patience)
+    --steps        int   steps per epoch (default 200)
+    --patience     int   early-stopping patience (default 20)
     --data_dir     str   (default data/raw/topics)
-    --checkpoint   str   (override checkpoint path)
+    --checkpoint   str   override checkpoint path
 """
 
 import argparse
-import os
 import csv
+import os
 import time
+
 import numpy as np
 
+from src.adam        import Adam
 from src.data_loader import DataLoader
 from src.rnnlm       import RNNLM
-from src.adam        import Adam
-from src.settings    import BEST_MODEL_WORD, BEST_MODEL_LETTER
+from src.settings    import BEST_MODEL_LETTER, BEST_MODEL_WORD
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Checkpoint helpers  (format-compatible with the training notebook)
+# Checkpoint helpers  (format-compatible with training notebooks)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def save_checkpoint(params: dict, path: str) -> None:
-    """Save a flat param dict to a .npz file (matches notebook format)."""
+    """Save a flat param dict to a .npz file."""
     path = str(path)
     if not path.endswith(".npz"):
         path += ".npz"
@@ -62,10 +66,78 @@ def load_checkpoint(path: str) -> dict:
     path = str(path)
     if not path.endswith(".npz"):
         path += ".npz"
-    data = np.load(path)
+    data   = np.load(path)
     params = {k: np.array(v) for k, v in data.items()}
     print(f"  Loaded <- {path}  ({len(params)} arrays)")
     return params
+
+
+def read_checkpoint_hparams(path: str) -> dict | None:
+    """
+    Read hyperparams from a checkpoint.
+
+    First tries the explicit scalar keys (_vocab_size etc.) written by
+    train.py.  If those are absent (e.g. checkpoint saved by a notebook),
+    infers the dimensions from the weight array shapes:
+
+        W_out  : (vocab_size, hidden_dim)
+        emb_E  : (vocab_size, embed_dim)
+        gru_*  : first weight shape reveals num_layers indirectly
+
+    Returns None only if the file does not exist.
+    Keys: vocab_size, embed_dim, hidden_dim, num_layers
+    """
+    path = str(path)
+    if not path.endswith(".npz"):
+        path += ".npz"
+    if not os.path.exists(path):
+        return None
+
+    data = np.load(path)
+
+    # ── Prefer explicit scalar keys (written by train.py) ────────
+    if "_vocab_size" in data:
+        return {
+            "vocab_size": int(data["_vocab_size"]),
+            "embed_dim":  int(data["_embed_dim"]),
+            "hidden_dim": int(data["_hidden_dim"]),
+            "num_layers": int(data["_num_layers"]),
+        }
+
+    # ── Infer from weight shapes (notebook-saved checkpoints) ────
+    # W_out shape: (vocab_size, hidden_dim)
+    # emb_E shape: (vocab_size, embed_dim)
+    # Count gru layers by counting distinct layer indices in keys
+    keys = list(data.keys())
+
+    if "W_out" not in data or "emb_E" not in data:
+        print("[train] WARNING: checkpoint has no recognisable weight keys.")
+        return None
+
+    vocab_size, hidden_dim = data["W_out"].shape
+    _,          embed_dim  = data["emb_E"].shape
+
+    # Layer count: gru keys look like "gru_cells_0_Wz" or "gru_0_Wz"
+    # Count unique layer indices present in key names
+    import re as _re
+    layer_indices = set()
+    for k in keys:
+        m = _re.search(r"(?:cells_|layer_?)(\d+)", k)
+        if m:
+            layer_indices.add(int(m.group(1)))
+    num_layers = len(layer_indices) if layer_indices else 2  # default 2
+
+    print(
+        f"[train] Inferred hparams from weight shapes — "
+        f"vocab={vocab_size}, embed={embed_dim}, "
+        f"hidden={hidden_dim}, layers={num_layers}"
+    )
+    return {
+        "vocab_size": vocab_size,
+        "embed_dim":  embed_dim,
+        "hidden_dim": hidden_dim,
+        "num_layers": num_layers,
+    }
 
 
 def apply_checkpoint(model: RNNLM, params: dict) -> None:
@@ -81,20 +153,19 @@ def apply_checkpoint(model: RNNLM, params: dict) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Helpers
+# Model factory
 # ──────────────────────────────────────────────────────────────────────────────
 
-def build_model(args, vocab_size: int) -> RNNLM:
-    """Construct an RNNLM according to args / ablation flag."""
-    ablation = getattr(args, "ablation", None)
-
+def build_model(vocab_size: int, embed_dim: int, hidden_dim: int,
+                num_layers: int, ablation: str | None) -> RNNLM:
+    """Construct an RNNLM (or ablation variant) with explicit dimensions."""
     kwargs = dict(
-        vocab_size  = vocab_size,
-        embed_dim   = args.embed,
-        hidden_dim  = args.hidden,
-        num_layers  = 2,
-        keep_prob   = 0.8,
-        attn_dim    = None,
+        vocab_size = vocab_size,
+        embed_dim  = embed_dim,
+        hidden_dim = hidden_dim,
+        num_layers = num_layers,
+        keep_prob  = 0.8,
+        attn_dim   = None,
     )
 
     if ablation == "single_layer":
@@ -110,11 +181,15 @@ def build_model(args, vocab_size: int) -> RNNLM:
         return NoAttentionRNNLM(**kwargs)
 
     elif ablation == "vanilla_rnn":
-        print("[Ablation] vanilla_rnn: using VanillaRNNLM (no gates)")
+        print("[Ablation] vanilla_rnn: 1-layer GRU, no dropout")
         return VanillaRNNLM(**kwargs)
 
     return RNNLM(**kwargs)
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Training loop
+# ──────────────────────────────────────────────────────────────────────────────
 
 def train_one_epoch(
     model: RNNLM,
@@ -135,7 +210,7 @@ def train_one_epoch(
         batch_loss /= len(X)
         total_loss += batch_loss
 
-        grads = model.backward(scale=1.0 / len(X))
+        grads  = model.backward(scale=1.0 / len(X))
         params = model.params()
         optimizer.step(params, grads)
 
@@ -150,53 +225,47 @@ def train_one_epoch(
 # ──────────────────────────────────────────────────────────────────────────────
 
 class NoAttentionRNNLM(RNNLM):
-    """RNNLM variant that skips BahdanauAttention; uses h_T directly."""
+    """RNNLM that skips BahdanauAttention; uses h_T (last hidden state) directly."""
 
     def forward(self, tokens, targets=None, training=True):
+        from src.rnnlm import cross_entropy, softmax as _softmax
         emb      = self.embedding.forward(tokens)
         H_states = self.gru.forward(emb, training=training)
         h_T      = H_states[-1]
 
         logits_single = self.W_out @ h_T + self.b_out
-        T = len(tokens)
+        T      = len(tokens)
         logits = np.tile(logits_single, (T, 1))
+        probs  = np.apply_along_axis(_softmax, 1, logits)
 
-        from src.attention import softmax
-        probs = np.apply_along_axis(softmax, 1, logits)
-
-        loss = 0.0
-        if targets is not None:
-            from src.rnnlm import cross_entropy
-            loss = cross_entropy(probs, targets)
+        loss = cross_entropy(probs, targets) if targets is not None else 0.0
 
         self._cache = dict(
             tokens=tokens, targets=targets,
             emb=emb, H_states=H_states,
-            h_attn=h_T, alpha=np.ones(T)/T,
+            h_attn=h_T, alpha=np.ones(T) / T,
             logits_single=logits_single, probs=probs, T=T,
         )
         return probs, loss
 
     def backward(self, scale=1.0):
-        c = self._cache
-        probs, targets = c["probs"], c["targets"]
-        T = c["T"]
+        c               = self._cache
+        probs, targets  = c["probs"], c["targets"]
+        T               = c["T"]
 
-        d_logits = probs.copy()
+        d_logits                    = probs.copy()
         d_logits[np.arange(T), targets] -= 1.0
-        d_logits /= T
-        d_logits *= scale
-        d_logits_single = d_logits.sum(axis=0)
+        d_logits                   /= T
+        d_logits                   *= scale
+        d_logits_single             = d_logits.sum(axis=0)
 
-        h_T = c["h_attn"]
-        self.dW_out += np.outer(d_logits_single, h_T)
+        self.dW_out += np.outer(d_logits_single, c["h_attn"])
         self.db_out += d_logits_single
-        d_h_T = self.W_out.T @ d_logits_single
+        d_h_T        = self.W_out.T @ d_logits_single
 
-        dH = np.zeros_like(c["H_states"])
-        dH[-1] = d_h_T
-
-        d_emb = self.gru.backward(dH)
+        dH       = np.zeros_like(c["H_states"])
+        dH[-1]   = d_h_T
+        d_emb    = self.gru.backward(dH)
         self.embedding.backward(d_emb)
 
         grads = {"W_out": self.dW_out, "b_out": self.db_out}
@@ -206,45 +275,43 @@ class NoAttentionRNNLM(RNNLM):
 
 
 class VanillaRNNLM(RNNLM):
-    """
-    Simplified RNNLM using a single-layer vanilla RNN (no gates, no attention).
-    For ablation study only.
-    """
+    """Single-layer GRU, no dropout — ablation baseline."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         from src.gru_layer import GRULayer
         self.gru = GRULayer(
             kwargs["embed_dim"], kwargs["hidden_dim"],
-            num_layers=1, keep_prob=1.0
+            num_layers=1, keep_prob=1.0,
         )
-        print("  [VanillaRNNLM] Using 1-layer GRU without dropout as RNN proxy.")
+        print("  [VanillaRNNLM] 1-layer GRU, no dropout.")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Main training loop
+# Main
 # ──────────────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="Train RNN Language Model")
-    parser.add_argument("--mode",        type=str,   default="char",
+    parser.add_argument("--mode",       type=str,   default="char",
                         choices=["char", "word"],
                         help="Tokenisation level: 'char' or 'word'")
-    parser.add_argument("--epochs",      type=int,   default=200)
-    parser.add_argument("--lr",          type=float, default=1e-3)
-    parser.add_argument("--hidden",      type=int,   default=256)
-    parser.add_argument("--embed",       type=int,   default=64)
-    parser.add_argument("--seq_len",     type=int,   default=100)
-    parser.add_argument("--batch_size",  type=int,   default=64)
-    parser.add_argument("--steps",       type=int,   default=200)
-    parser.add_argument("--patience",    type=int,   default=20)
-    parser.add_argument("--data_dir",    type=str,   default="data/raw/topics")
-    parser.add_argument("--checkpoint",  type=str,   default=None,
-                        help="Override checkpoint path. Defaults to "
-                             "checkpoints/best_model_word or best_model_letter.")
-    parser.add_argument("--scratch",     action="store_true",
-                        help="Train from random weights, ignoring any existing checkpoint.")
-    parser.add_argument("--ablation",    type=str,   default=None,
+    parser.add_argument("--scratch",    action="store_true",
+                        help="Train from random weights, ignoring any checkpoint.")
+    parser.add_argument("--epochs",     type=int,   default=200)
+    parser.add_argument("--lr",         type=float, default=1e-3)
+    parser.add_argument("--hidden",     type=int,   default=256,
+                        help="Hidden dim (overridden by checkpoint when resuming)")
+    parser.add_argument("--embed",      type=int,   default=64,
+                        help="Embed dim (overridden by checkpoint when resuming)")
+    parser.add_argument("--seq_len",    type=int,   default=100)
+    parser.add_argument("--batch_size", type=int,   default=64)
+    parser.add_argument("--steps",      type=int,   default=200)
+    parser.add_argument("--patience",   type=int,   default=20)
+    parser.add_argument("--data_dir",   type=str,   default="data/raw/topics")
+    parser.add_argument("--checkpoint", type=str,   default=None,
+                        help="Override checkpoint path.")
+    parser.add_argument("--ablation",   type=str,   default=None,
                         choices=[None, "no_attention", "single_layer",
                                  "no_dropout", "vanilla_rnn"])
     args = parser.parse_args()
@@ -252,103 +319,153 @@ def main():
     os.makedirs("checkpoints", exist_ok=True)
     os.makedirs("report",      exist_ok=True)
 
-    # ── Resolve checkpoint path from mode ────────────────────────
+    # ── Resolve checkpoint path ───────────────────────────────────
     if args.checkpoint is None:
-        if args.mode == "word":
-            ckpt_path = str(BEST_MODEL_WORD).replace(".npz", "")
-        else:
-            ckpt_path = str(BEST_MODEL_LETTER).replace(".npz", "")
+        base_ckpt = (BEST_MODEL_WORD if args.mode == "word"
+                     else BEST_MODEL_LETTER)
     else:
-        ckpt_path = args.checkpoint
+        base_ckpt = args.checkpoint
 
-    # Append ablation suffix if needed
-    suffix = f"_{args.ablation}" if args.ablation else ""
-    ckpt_path = ckpt_path + suffix
+    suffix    = f"_{args.ablation}" if args.ablation else ""
+    # Resolve to absolute path so cwd at invocation never matters
+    from pathlib import Path as _Path
+    ckpt_path = str(_Path(base_ckpt).resolve()).removesuffix(".npz") + suffix
     ckpt_file = ckpt_path + ".npz"
 
-    # ── 1. Data ─────────────────────────────────────────────────
+    print(f"\n[train] Checkpoint : {ckpt_file}")
+    print(f"[train] File exists : {os.path.exists(ckpt_file)}")
+
+    # ── Read hyperparams from checkpoint (if resuming) ────────────
+    resuming     = not args.scratch and os.path.exists(ckpt_file)
+    ckpt_hparams = read_checkpoint_hparams(ckpt_file) if resuming else None
+
+    if resuming and ckpt_hparams is not None:
+        embed_dim  = ckpt_hparams["embed_dim"]
+        hidden_dim = ckpt_hparams["hidden_dim"]
+        num_layers = ckpt_hparams["num_layers"]
+        ckpt_vocab = ckpt_hparams["vocab_size"]
+        # For word mode: cap DataLoader vocab to match checkpoint
+        max_vocab  = (ckpt_vocab - 2) if args.mode == "word" else None
+        print(
+            f"\n=== Resuming from checkpoint: {ckpt_file} ===\n"
+            f"    Checkpoint hparams: vocab={ckpt_vocab}, embed={embed_dim}, "
+            f"hidden={hidden_dim}, layers={num_layers}"
+        )
+    else:
+        embed_dim  = args.embed
+        hidden_dim = args.hidden
+        num_layers = 2
+        max_vocab  = None
+        if args.scratch:
+            print("\n=== Starting from scratch (--scratch flag set) ===")
+        else:
+            print(
+                f"\n=== No checkpoint found at '{ckpt_file}' "
+                "— starting from scratch ==="
+            )
+
+    # ── 1. Data ───────────────────────────────────────────────────
     print(f"\n=== Loading dataset (mode='{args.mode}') ===")
     loader = DataLoader(
         data_dir   = args.data_dir,
         seq_len    = args.seq_len,
         batch_size = args.batch_size,
         mode       = args.mode,
+        max_vocab  = max_vocab,
     )
 
-    # ── 2. Model ─────────────────────────────────────────────────
-    print("\n=== Building model ===")
-    model = build_model(args, vocab_size=loader.vocab.size)
-    print(f"    mode={args.mode}, vocab_size={loader.vocab.size}, "
-          f"hidden={args.hidden}, embed={args.embed}")
+    # Sanity check: vocab must match checkpoint exactly
+    if resuming and ckpt_hparams is not None and loader.vocab.size != ckpt_hparams["vocab_size"]:
+        raise RuntimeError(
+            f"Vocab size mismatch after applying max_vocab cap: "
+            f"DataLoader={loader.vocab.size}, checkpoint={ckpt_hparams['vocab_size']}. "
+            f"The corpus or data_dir may have changed since the checkpoint was saved."
+        )
 
-    # ── Resume or scratch ─────────────────────────────────────────
-    if not args.scratch and os.path.exists(ckpt_file):
-        print(f"\n=== Resuming from checkpoint: {ckpt_file} ===")
+    # ── 2. Model ──────────────────────────────────────────────────
+    print("\n=== Building model ===")
+    model = build_model(
+        vocab_size = loader.vocab.size,
+        embed_dim  = embed_dim,
+        hidden_dim = hidden_dim,
+        num_layers = num_layers,
+        ablation   = args.ablation,
+    )
+    print(
+        f"    mode={args.mode}, vocab={loader.vocab.size}, "
+        f"embed={embed_dim}, hidden={hidden_dim}, layers={num_layers}"
+    )
+
+    # ── 3. Load weights if resuming ───────────────────────────────
+    if resuming:
         params = load_checkpoint(ckpt_file)
         apply_checkpoint(model, params)
-    elif args.scratch:
-        print("\n=== Starting from scratch (--scratch flag set) ===")
-    else:
-        print(f"\n=== No checkpoint found at '{ckpt_file}' — starting from scratch ===")
 
-    # ── 3. Optimiser ─────────────────────────────────────────────
+    # ── 4. Optimiser ──────────────────────────────────────────────
     optimizer = Adam(lr=args.lr, clip=5.0)
 
-    # ── 4. Training loop ─────────────────────────────────────────
-    best_val_ppl = float("inf")
+    # ── 5. Training loop ──────────────────────────────────────────
+    best_val_ppl     = float("inf")
     patience_counter = 0
-    history = []   # (epoch, train_loss, val_ppl)
+    history: list[tuple] = []
 
     print("\n=== Training ===")
     for epoch in range(1, args.epochs + 1):
-        t0 = time.time()
+        t0         = time.time()
         train_loss = train_one_epoch(model, optimizer, loader, args.steps)
         val_ppl    = loader.compute_perplexity(model, "val", steps=30)
         elapsed    = time.time() - t0
 
-        print(f"Epoch {epoch:02d}/{args.epochs}  "
-              f"loss={train_loss:.4f}  val_ppl={val_ppl:.2f}  "
-              f"({elapsed:.0f}s)")
-
+        print(
+            f"Epoch {epoch:03d}/{args.epochs}  "
+            f"loss={train_loss:.4f}  val_ppl={val_ppl:.2f}  "
+            f"({elapsed:.0f}s)"
+        )
         history.append((epoch, train_loss, val_ppl))
 
-        # ── Checkpointing ─────────────────────────────────────────
         if val_ppl < best_val_ppl:
-            best_val_ppl = val_ppl
+            best_val_ppl     = val_ppl
             patience_counter = 0
-            save_checkpoint(model.params(), ckpt_path)
-            print(f"  ✓ New best val_ppl={val_ppl:.2f} — checkpoint saved → {ckpt_path}")
+            # Build full payload: params + hyperparams
+            payload = model.params()
+            payload["_vocab_size"] = np.array(loader.vocab.size)
+            payload["_embed_dim"]  = np.array(embed_dim)
+            payload["_hidden_dim"] = np.array(hidden_dim)
+            payload["_num_layers"] = np.array(model.gru.num_layers)
+            save_checkpoint(payload, ckpt_path)
+            print(f"  ✓ New best val_ppl={val_ppl:.2f} — saved → {ckpt_file}")
         else:
             patience_counter += 1
             print(f"  No improvement ({patience_counter}/{args.patience})")
 
         if patience_counter >= args.patience:
-            print(f"\nEarly stopping triggered after epoch {epoch}.")
+            print(f"\nEarly stopping after epoch {epoch}.")
             break
 
-    # ── 5. Save training log ─────────────────────────────────────
+    # ── 6. Training log ───────────────────────────────────────────
     log_path = f"report/training_log_{args.mode}{suffix}.csv"
     with open(log_path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["epoch", "train_loss", "val_ppl"])
         writer.writerows(history)
-    print(f"\nTraining log saved → {log_path}")
+    print(f"\nTraining log → {log_path}")
 
-    # ── 6. Test evaluation ───────────────────────────────────────
-    apply_checkpoint(model, load_checkpoint(ckpt_file))
+    # ── 7. Test evaluation (reload best weights) ──────────────────
+    best_params = load_checkpoint(ckpt_file)
+    apply_checkpoint(model, best_params)
     test_ppl = loader.compute_perplexity(model, "test", steps=50)
-    print(f"\nFinal test perplexity ({args.mode}-level): {test_ppl:.2f}")
+    print(f"Final test perplexity ({args.mode}-level): {test_ppl:.2f}")
 
-    # ── 7. Ablation comparison ───────────────────────────────────
+    # ── 8. Ablation log ───────────────────────────────────────────
     if args.ablation:
-        ablation_path = "report/ablation_results.csv"
-        file_exists = os.path.isfile(ablation_path)
-        with open(ablation_path, "a", newline="") as f:
+        abl_path   = "report/ablation_results.csv"
+        file_exists = os.path.isfile(abl_path)
+        with open(abl_path, "a", newline="") as f:
             writer = csv.writer(f)
             if not file_exists:
                 writer.writerow(["variant", "mode", "best_val_ppl", "test_ppl"])
             writer.writerow([args.ablation, args.mode, best_val_ppl, test_ppl])
-        print(f"Ablation results appended → {ablation_path}")
+        print(f"Ablation results → {abl_path}")
 
 
 if __name__ == "__main__":

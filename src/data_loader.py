@@ -9,14 +9,23 @@ Partition: 80% train / 10% validation / 10% test.
 
 Pass mode="char" (default) for the character-level model,
 or mode="word" for the word-level model.
+
+Pass max_vocab=N to cap word-level vocab to the N most frequent tokens
+(rare words map to <UNK>). This is required when resuming a checkpoint
+that was trained with a smaller vocabulary — set max_vocab to
+(checkpoint _vocab_size - 2) to exclude the 2 special tokens.
 """
 
 import os
 import re
 import random
-import numpy as np
-from src.settings import GENRES_DATA_DIR
+from collections import Counter
 from pathlib import Path
+
+import numpy as np
+
+from src.settings import GENRES_DATA_DIR
+
 # ──────────────────────────────────────────────
 # Special tokens
 # ──────────────────────────────────────────────
@@ -33,21 +42,30 @@ class Vocabulary:
         self.mode: str = "char"
         self._built = False
 
-    def build(self, text: str, mode: str = "char") -> None:
+    def build(self, text: str, mode: str = "char",
+              max_vocab: int | None = None) -> None:
         """
         Build vocab from a string of all training text.
 
         Parameters
         ----------
-        text : str   — full training corpus as a single string
-        mode : str   — "char" (default) or "word"
+        text      : full training corpus as a single string
+        mode      : "char" or "word"
+        max_vocab : if set, keep only the top-N most frequent tokens
+                    (word mode only). Rare tokens map to <UNK>.
+                    Ignored in char mode.
         """
         self.mode = mode
 
         if mode == "char":
             tokens = sorted(set(text))
         elif mode == "word":
-            tokens = sorted(set(text.split()))
+            words = text.split()
+            if max_vocab is not None:
+                counts = Counter(words)
+                tokens = sorted(w for w, _ in counts.most_common(max_vocab))
+            else:
+                tokens = sorted(set(words))
         else:
             raise ValueError(f"Unknown vocab mode '{mode}'. Use 'char' or 'word'.")
 
@@ -66,14 +84,14 @@ class Vocabulary:
         unk = self.char2idx[UNK_TOKEN]
         if self.mode == "char":
             return [self.char2idx.get(ch, unk) for ch in text]
-        else:  # word
+        else:
             return [self.char2idx.get(w, unk) for w in text.split()]
 
     def decode(self, indices: list[int]) -> str:
         tokens = [self.idx2char.get(i, UNK_TOKEN) for i in indices]
         if self.mode == "char":
             return "".join(tokens)
-        else:  # word
+        else:
             return " ".join(tokens)
 
 
@@ -88,8 +106,11 @@ class DataLoader:
     seq_len    : context window length (in tokens)
     batch_size : number of sequences per batch
     seed       : random seed
-    mode       : "char" for character-level model,
-                 "word" for word-level model
+    mode       : "char" or "word"
+    max_vocab  : cap word-level vocabulary to the top-N most frequent tokens.
+                 Set to (checkpoint _vocab_size - 2) when resuming a word-level
+                 checkpoint so vocab sizes stay consistent.
+                 Ignored in char mode.
     """
 
     def __init__(
@@ -99,20 +120,19 @@ class DataLoader:
         batch_size: int = 64,
         seed: int = 42,
         mode: str = "char",
+        max_vocab: int | None = None,
     ):
-        self.data_dir = data_dir
-        self.seq_len = seq_len
+        self.data_dir  = Path(data_dir)
+        self.seq_len   = seq_len
         self.batch_size = batch_size
-        self.rng = random.Random(seed)
-        self.np_rng = np.random.default_rng(seed)
-        self.mode = mode
+        self.rng       = random.Random(seed)
+        self.np_rng    = np.random.default_rng(seed)
+        self.mode      = mode
+        self.max_vocab = max_vocab
 
         self.vocab = Vocabulary()
 
-        # Raw poem strings per split
-        self.splits: dict[str, list[str]] = {}
-
-        # Encoded flat arrays per split (for fast slicing)
+        self.splits:  dict[str, list[str]]  = {}
         self.encoded: dict[str, np.ndarray] = {}
 
         self._load_and_split()
@@ -124,53 +144,48 @@ class DataLoader:
     # ──────────────────────────────────────────
 
     def _load_poems(self) -> list[str]:
-        """
-        Read all .txt files in data_dir.
-        Poems are separated by blank lines (standard Gutenberg format).
-        """
-        poems: list[str] = []
-        txt_files = []
-        for genre in os.listdir(self.data_dir):
-            genre_path = os.path.join(self.data_dir, genre)
+        """Read all .txt files under data_dir/genre/ sub-directories."""
+        txt_files: list[Path] = []
+        for genre_path in sorted(self.data_dir.iterdir()):
+            if genre_path.is_dir():
+                txt_files.extend(sorted(genre_path.glob("*.txt")))
 
-            if not os.path.isdir(genre_path):
-                continue  # skip files if any
-            for f in os.listdir(genre_path):
-                if f.endswith(".txt"):
-                    file_path = os.path.join(genre_path, f)
-                    txt_files.append(file_path)
-
-        if not txt_files or len(txt_files) == 0:
+        if not txt_files:
             raise FileNotFoundError(
-                f"No .txt files found in '{self.data_dir}'. "
+                f"No .txt files found under '{self.data_dir}'. "
                 "Please place your poetry corpus files there."
             )
-        for path in sorted(txt_files):
-            with open(path, encoding="utf-8", errors="replace") as fh:
-                raw = fh.read()
-            # Split on double newlines to separate poems/stanzas
+
+        poems: list[str] = []
+        for path in txt_files:
+            raw = path.read_text(encoding="utf-8", errors="replace")
             blocks = re.split(r"\n{2,}", raw.strip())
-            poems.extend([b.strip() for b in blocks if len(b.strip()) > 50])
+            poems.extend(b.strip() for b in blocks if len(b.strip()) > 50)
         return poems
 
     def _load_and_split(self) -> None:
         poems = self._load_poems()
         self.rng.shuffle(poems)
-        n = len(poems)
+        n       = len(poems)
         n_train = int(0.8 * n)
-        n_val = int(0.1 * n)
+        n_val   = int(0.1 * n)
         self.splits["train"] = poems[:n_train]
-        self.splits["val"] = poems[n_train : n_train + n_val]
-        self.splits["test"] = poems[n_train + n_val :]
+        self.splits["val"]   = poems[n_train : n_train + n_val]
+        self.splits["test"]  = poems[n_train + n_val :]
         print(
             f"[DataLoader] Poems — train: {len(self.splits['train'])}, "
             f"val: {len(self.splits['val'])}, test: {len(self.splits['test'])}"
         )
 
     def _build_vocab(self) -> None:
-        train_text = "\n".join(self.splits["train"])
-        self.vocab.build(train_text, mode=self.mode)
-        print(f"[DataLoader] Vocabulary size ({self.mode}-level): {self.vocab.size}")
+        train_text    = "\n".join(self.splits["train"])
+        effective_max = self.max_vocab if self.mode == "word" else None
+        self.vocab.build(train_text, mode=self.mode, max_vocab=effective_max)
+        cap_note = f", capped at {self.max_vocab}" if effective_max else ""
+        print(
+            f"[DataLoader] Vocabulary size ({self.mode}-level{cap_note}): "
+            f"{self.vocab.size}"
+        )
 
     def _encode_splits(self) -> None:
         for split, poems in self.splits.items():
@@ -179,7 +194,8 @@ class DataLoader:
                 self.vocab.encode(text), dtype=np.int32
             )
             print(
-                f"[DataLoader] {split} encoded length: {len(self.encoded[split]):,} tokens"
+                f"[DataLoader] {split} encoded length: "
+                f"{len(self.encoded[split]):,} tokens"
             )
 
     # ──────────────────────────────────────────
@@ -190,24 +206,22 @@ class DataLoader:
         self, split: str = "train"
     ) -> tuple[np.ndarray, np.ndarray]:
         """
-        Sample a random batch of (X, Y) pairs where:
+        Sample a random batch:
           X: (batch_size, seq_len) — input token indices
-          Y: (batch_size, seq_len) — target token indices (X shifted by 1)
+          Y: (batch_size, seq_len) — targets (X shifted right by 1)
         """
-        data = self.encoded[split]
+        data      = self.encoded[split]
         max_start = len(data) - self.seq_len - 1
         if max_start <= 0:
             raise ValueError(
                 f"Split '{split}' is too short for seq_len={self.seq_len}."
             )
         starts = self.np_rng.integers(0, max_start, size=self.batch_size)
-        X = np.stack([data[s : s + self.seq_len] for s in starts])
+        X = np.stack([data[s     : s + self.seq_len]     for s in starts])
         Y = np.stack([data[s + 1 : s + self.seq_len + 1] for s in starts])
         return X, Y
 
-    def iter_epoch(
-        self, split: str = "train", steps_per_epoch: int = 200
-    ):
+    def iter_epoch(self, split: str = "train", steps_per_epoch: int = 200):
         """Yield (X, Y) batches for one epoch."""
         for _ in range(steps_per_epoch):
             yield self.sample_batch(split)
@@ -216,49 +230,27 @@ class DataLoader:
         self, model, split: str = "val", steps: int = 50
     ) -> float:
         """
-        Estimate perplexity on a split by averaging cross-entropy
-        over `steps` random batches.
+        Estimate perplexity on `split` by averaging cross-entropy
+        over `steps` random batches (inference mode — no dropout).
         """
         total_loss = 0.0
         for _ in range(steps):
             X, Y = self.sample_batch(split)
-            # Evaluate one sequence at a time (batch size 1 for simplicity)
             for i in range(len(X)):
-                _, loss = model.forward(X[i], Y[i])
+                _, loss = model.forward(X[i], Y[i], training=False)
                 total_loss += loss
         avg_loss = total_loss / (steps * self.batch_size)
         return float(np.exp(avg_loss))
 
 
-
-
 if __name__ == "__main__":
     print("🔍 Testing DataLoader...\n")
-
     for mode in ["char", "word"]:
-        print(f"\n{'='*40}")
-        print(f"  Mode: {mode}-level")
-        print(f"{'='*40}")
-
+        print(f"\n{'='*40}\n  Mode: {mode}-level\n{'='*40}")
         loader = DataLoader(mode=mode)
-
-        print("\n📊 Split sizes:")
         for split in ["train", "val", "test"]:
             print(f"  {split}: {len(loader.splits[split])} poems")
-
-        print(f"\n🔤 Vocabulary size: {loader.vocab.size}")
-
-        sample_text = loader.splits["train"][0][:200]
-        encoded = loader.vocab.encode(sample_text)
-        decoded = loader.vocab.decode(encoded)
-
-        print("\n🔁 Encode/Decode Test:")
-        print("Original:", sample_text[:100])
-        print("Decoded :", decoded[:100])
-
+        print(f"  Vocab: {loader.vocab.size}")
         X, Y = loader.sample_batch("train")
-        print("\n📦 Batch shapes:")
-        print("X:", X.shape)
-        print("Y:", Y.shape)
-
+        print(f"  Batch X: {X.shape}, Y: {Y.shape}")
     print("\n✅ DataLoader test complete!")

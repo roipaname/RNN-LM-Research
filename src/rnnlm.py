@@ -308,18 +308,73 @@ class RNNLM:
         print(f"[RNNLM] Loaded checkpoint ← {path}")
 
     @staticmethod
+    def _infer_hparams(data) -> dict:
+        """
+        Infer model hyperparams from a loaded .npz archive.
+
+        Tries explicit scalar keys first (_vocab_size etc., written by train.py).
+        Falls back to inferring from weight array shapes for notebook-saved
+        checkpoints that lack those keys:
+            W_out : (vocab_size, hidden_dim)
+            emb_E : (vocab_size, embed_dim)
+            gru_* layer indices → num_layers
+        """
+        if "_vocab_size" in data:
+            return {
+                "vocab_size": int(data["_vocab_size"]),
+                "embed_dim":  int(data["_embed_dim"]),
+                "hidden_dim": int(data["_hidden_dim"]),
+                "num_layers": int(data["_num_layers"]),
+            }
+
+        # Shape-based inference
+        if "W_out" not in data or "emb_E" not in data:
+            raise KeyError(
+                "Checkpoint is missing both explicit hparam keys (_vocab_size etc.) "
+                "and the expected weight arrays (W_out, emb_E). "
+                "Cannot reconstruct model dimensions."
+            )
+
+        vocab_size, hidden_dim = data["W_out"].shape
+        _,          embed_dim  = data["emb_E"].shape
+
+        import re as _re
+        layer_indices = set()
+        for k in data.keys():
+            m = _re.search(r"(?:cells_|layer_?)(\d+)", k)
+            if m:
+                layer_indices.add(int(m.group(1)))
+        num_layers = len(layer_indices) if layer_indices else 2
+
+        print(
+            f"[RNNLM] Inferred hparams from weight shapes — "
+            f"vocab={vocab_size}, embed={embed_dim}, "
+            f"hidden={hidden_dim}, layers={num_layers}"
+        )
+        return {
+            "vocab_size": vocab_size,
+            "embed_dim":  embed_dim,
+            "hidden_dim": hidden_dim,
+            "num_layers": num_layers,
+        }
+
+    @staticmethod
     def from_checkpoint(path: str) -> "RNNLM":
         """
         Reconstruct an RNNLM with the exact hyperparams stored in a checkpoint,
-        then load the weights. Use this in app.py instead of hardcoding dims.
+        then load the weights.
+
+        Works with both train.py-saved checkpoints (explicit scalar hparam keys)
+        and notebook-saved checkpoints (dims inferred from weight shapes).
         """
         fpath = path if path.endswith(".npz") else path + ".npz"
         data  = np.load(fpath)
+        hp    = RNNLM._infer_hparams(data)
         model = RNNLM(
-            vocab_size = int(data["_vocab_size"]),
-            embed_dim  = int(data["_embed_dim"]),
-            hidden_dim = int(data["_hidden_dim"]),
-            num_layers = int(data["_num_layers"]),
+            vocab_size = hp["vocab_size"],
+            embed_dim  = hp["embed_dim"],
+            hidden_dim = hp["hidden_dim"],
+            num_layers = hp["num_layers"],
             keep_prob  = 1.0,   # inference — no dropout
         )
         model.load(fpath)
