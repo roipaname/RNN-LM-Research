@@ -1,5 +1,30 @@
-numpy>=1.26.0
-tqdm>=4.66.0
+# ──────────────────────────────────────────────────────────────
+# requirements.txt
+# Poetry Transformer LM — pure-NumPy model + Streamlit frontend
+# ──────────────────────────────────────────────────────────────
+#
+# Install:
+#   pip install -r requirements.txt
+#
+# For GPU-accelerated notebook training (Colab / local CUDA):
+#   pip install "jax[cuda12]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+#   pip install optax
+# (JAX and Optax are NOT listed here because they require platform-
+#  specific CUDA wheel flags and are only needed for the Colab notebook,
+#  not for the pure-NumPy train.py / app.py pipeline.)
+# ──────────────────────────────────────────────────────────────
+
+# ── Core scientific stack ─────────────────────────────────────
+numpy>=1.26,<3.0
+
+# ── Web app ───────────────────────────────────────────────────
 streamlit>=1.35.0
-seaborn>=0.13.0
+
+# ── Plotting ──────────────────────────────────────────────────
 matplotlib>=3.8.0
+
+# ── Logging ───────────────────────────────────────────────────
+loguru>=0.7.0
+
+# ── Standard-library extras (no pip install needed, listed for clarity) ───
+# os, re, math, time, csv, argparse, pathlib, random, collections — stdlib

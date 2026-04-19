@@ -12,5 +12,6 @@ rnn_lm/notebooks
 │   ├── rnnlm.py           ← Step 7
 │   ├── adam.py            ← Step 8
 │   └── sampling.py        ← Step 9
+        settings.py
 ├── scripts/train.py               ← Step 10
 └── frontend/app.py                 ← Step 11 (Streamlit)
