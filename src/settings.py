@@ -23,7 +23,7 @@ for _dir in [DATA_DIR, RAW_DATA_DIR, GENRES_DATA_DIR,
 # Model checkpoint paths
 # ──────────────────────────────────────────────
 # Transformer (new architecture)
-BEST_MODEL_TRANSFORMER = CHECKPOINTS_DIR / "best_transformer.npz"
+BEST_MODEL_TRANSFORMER = CHECKPOINTS_DIR / "best_transformer.npz"#volatile icloud doing nonsense
 
 # Legacy GRU checkpoints (kept for reference — not used by TransformerLM)
 BEST_MODEL_WORD   = CHECKPOINTS_DIR / "best_model_word.npz"
