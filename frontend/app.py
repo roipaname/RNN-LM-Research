@@ -41,6 +41,7 @@ st.set_page_config(
     page_icon="◈",
     layout="wide",
     initial_sidebar_state="expanded",
+    
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -116,6 +117,8 @@ section[data-testid="stSidebar"] {
 section[data-testid="stSidebar"] * { color: var(--ivory-dim) !important; }
 section[data-testid="stSidebar"] .stSlider [data-baseweb="slider"] { }
 
+
+            
 /* ── Glass card mixin — applied via inline style divs ── */
 
 /* ── Inputs ── */
