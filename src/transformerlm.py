@@ -416,13 +416,51 @@ class TransformerLM:
                     "Use TransformerLM.from_checkpoint(path) to reconstruct automatically."
                 )
 
+        # ── Detect checkpoint format (JAX notebook vs src/ native) ──
+        is_jax_ckpt = "emb" in data and not any(k.startswith("emb_") for k in data)
+
+        if is_jax_ckpt:
+            # ── JAX notebook format → translate keys to src/ format ──
+            translated = {}
+            translated["emb_E"] = np.array(data["emb"])
+
+            num_layers = self.num_layers
+            for i in range(num_layers):
+                p = f"b{i}"   # JAX prefix  e.g. "b0"
+                d = f"block{i}"  # src prefix e.g. "block0"
+                translated[f"{d}_W_qkv"]    = np.array(data[f"{p}_qkv"])
+                translated[f"{d}_b_qkv"]    = np.array(data[f"{p}_qkv_b"])
+                translated[f"{d}_W_o"]      = np.array(data[f"{p}_wo"])
+                translated[f"{d}_b_o"]      = np.array(data[f"{p}_wo_b"])
+                translated[f"{d}_W1"]       = np.array(data[f"{p}_ff1"])
+                translated[f"{d}_b1"]       = np.array(data[f"{p}_ff1_b"])
+                translated[f"{d}_W2"]       = np.array(data[f"{p}_ff2"])
+                translated[f"{d}_b2"]       = np.array(data[f"{p}_ff2_b"])
+                translated[f"{d}_ln1_gamma"] = np.array(data[f"{p}_ln1_g"])
+                translated[f"{d}_ln1_beta"]  = np.array(data[f"{p}_ln1_b"])
+                translated[f"{d}_ln2_gamma"] = np.array(data[f"{p}_ln2_g"])
+                translated[f"{d}_ln2_beta"]  = np.array(data[f"{p}_ln2_b"])
+
+            translated["final_ln_gamma"] = np.array(data["final_ln_g"])
+            translated["final_ln_beta"]  = np.array(data["final_ln_b"])
+            data = translated  # shadow the npz handle with the translated dict
+
         # ── Route weights to sub-modules ──────────────────────────
         emb_dict = {k[4:]: v for k, v in data.items() if k.startswith("emb_")}
+        if not emb_dict:
+            raise KeyError(
+                "[TransformerLM] No embedding weights found in checkpoint. "
+                "Expected key 'emb_E' (src/ format) or 'emb' (JAX format)."
+            )
         self.embedding.load_state_dict(emb_dict)
 
         for i, block in enumerate(self.blocks):
             pfx = f"block{i}_"
             block_dict = {k[len(pfx):]: v for k, v in data.items() if k.startswith(pfx)}
+            if not block_dict:
+                raise KeyError(
+                    f"[TransformerLM] No weights found for block {i} in checkpoint."
+                )
             block.load_state_dict(block_dict)
 
         self.final_ln_gamma = data["final_ln_gamma"].copy()

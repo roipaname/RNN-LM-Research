@@ -641,9 +641,9 @@ with st.sidebar:
     ckpt_path = ckpt_input.strip() or _DEFAULT_CKPT
 
     st.markdown("<hr>", unsafe_allow_html=True)
-    temperature     = st.slider("Temperature",        0.0, 2.0, 0.85, 0.05)
+    temperature     = st.slider("Temperature",        0.0, 2.0, 1.25, 0.05)
     top_k           = st.slider("Top-k sampling",     0,   50,  50)
-    n_tokens        = st.slider("Tokens to generate", 1,   300, 60)
+    n_tokens        = st.slider("Tokens to generate", 1,   300, 100)
     show_candidates = st.slider("Candidates to show", 3,   15,  8)
     words_per_line  = st.slider("Words per line",     4,   16,  8,
                                 help="Controls poem line wrapping in the output.")
@@ -656,8 +656,8 @@ with st.sidebar:
         Attention Visualisation</div>
     """, unsafe_allow_html=True)
     show_attn  = st.checkbox("Show attention map", value=True)
-    attn_layer = st.number_input("Layer index", min_value=0, max_value=15, value=0, step=1)
-    attn_head  = st.number_input("Head index",  min_value=0, max_value=31, value=0, step=1)
+    attn_layer = st.number_input("Layer index", min_value=0, max_value=15, value=10, step=1)
+    attn_head  = st.number_input("Head index",  min_value=0, max_value=31, value=10, step=1)
 
     st.markdown("<hr>", unsafe_allow_html=True)
     st.markdown("""
