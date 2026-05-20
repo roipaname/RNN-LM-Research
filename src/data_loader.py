@@ -1,20 +1,4 @@
-"""
-data_loader.py
---------------
-Loads the poetry corpus, builds the word-level vocabulary,
-encodes all sequences, and provides batch sampling.
 
-Split is done at PASSAGE level (poem stanzas separated by blank lines)
-to prevent data leakage.  Partition: 80% train / 10% val / 10% test.
-
-Changes from the original:
-  • Word-level only (mode="word" is the default and only supported mode)
-  • max_files cap (default 500) — uses only the first N .txt files
-  • Extended special tokens: <PAD>, <UNK>, <NL>, <BOS>, <EOS>
-  • vocab_size_cap: keeps only the top-N most frequent words
-  • tokenize() preserves newlines as <NL> tokens (important for poetry)
-  • DataLoader.jax_batch() removed (JAX-specific; not needed in pure-NumPy path)
-"""
 
 import os
 import re

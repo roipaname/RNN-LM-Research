@@ -6,10 +6,7 @@ Sinusoidal positional encoding (Vaswani et al., 2017).
 PE(pos, 2i)   = sin(pos / 10000^(2i/d_model))
 PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
 
-The matrix is computed once for a maximum sequence length and cached.
-At runtime, call get(seq_len) to retrieve a (seq_len, d_model) slice.
 
-No learnable parameters — this module has no save/load surface.
 """
 
 import numpy as np

@@ -14,15 +14,6 @@ Architecture (forward pass):
            ( logits = x @ embedding_matrix.T )
       └─ label-smoothed cross-entropy      → loss (scalar)
 
-Public API (mirrors the old RNNLM class):
-    forward(tokens, targets, training) -> (logits, loss)
-    backward(scale)                    -> grads dict
-    generate(seed_tokens, vocab, ...)  -> (completion_str, attention_weights)
-    zero_grad()
-    params()
-    save(path)
-    load(path)
-    from_checkpoint(path)              [staticmethod]
 """
 
 import numpy as np

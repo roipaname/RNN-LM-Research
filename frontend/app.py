@@ -1,15 +1,3 @@
-"""
-app.py
-------
-Streamlit inference interface for the Transformer Language Model.
-
-Run with:
-    streamlit run frontend/app.py
-
-Handles two checkpoint formats transparently:
-  • Colab/notebook format — keys like 'emb', 'b0_ff1', 'b0_qkv' (no metadata)
-  • train.py format      — same keys + explicit '_vocab_size' etc. scalars
-"""
 
 import sys
 import os
@@ -432,13 +420,7 @@ def load_resources(ckpt_path: str):
         batch_size     = 1,
         vocab_size_cap = vocab_cap,
     )
-
-    if loader.vocab.size != hp["vocab_size"]:
-        st.warning(
-            f"Vocab size mismatch: checkpoint={hp['vocab_size']}, "
-            f"loader built={loader.vocab.size}. "
-            "Words outside the shared vocabulary will decode as '?'."
-        )
+    
 
     model = TransformerLM(
         vocab_size    = hp["vocab_size"],

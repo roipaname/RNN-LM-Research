@@ -1,44 +1,4 @@
-"""
-train.py
---------
-Training script for the Transformer Language Model.
 
-By default the script RESUMES from the best existing checkpoint if one is
-found.  The checkpoint's stored hyperparams (_vocab_size, _embed_dim,
-_num_heads, _num_layers, _ffn_dim) are used to rebuild the model and
-DataLoader automatically.
-
-Pass --scratch to ignore any checkpoint and train from random weights.
-
-Usage:
-    python -m scripts.train                  # resume (default)
-    python -m scripts.train --scratch        # fresh run
-    python -m scripts.train --ablation no_pe
-    python -m scripts.train --ablation single_layer
-    python -m scripts.train --ablation no_dropout
-    python -m scripts.train --ablation small
-
-CLI flags (only needed when training from --scratch or first run):
-    --scratch        flag   ignore checkpoint; train from random weights
-    --epochs         int    (default 50)
-    --lr             float  (default 3e-4)
-    --embed          int    d_model       (default 256)
-    --heads          int    num_heads     (default 8)
-    --layers         int    num_layers    (default 4)
-    --ffn_dim        int    FFN inner dim (default 1024)
-    --dropout        float  (default 0.10)
-    --seq_len        int    (default 64)
-    --batch_size     int    (default 32)
-    --steps          int    steps per epoch (default 300)
-    --val_steps      int    validation steps per epoch (default 20)
-    --patience       int    early-stopping patience (default 15)
-    --warmup         int    LR warmup steps (default 1000)
-    --max_files      int    cap on .txt files loaded (default 500)
-    --vocab_cap      int    vocabulary size cap (default 8000)
-    --data_dir       str    (default data/raw/topics)
-    --checkpoint     str    override checkpoint path
-    --ablation       str    one of: no_pe, single_layer, no_dropout, small
-"""
 
 import argparse
 import csv
